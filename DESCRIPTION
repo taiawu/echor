@@ -20,4 +20,7 @@ Imports:
     dplyr,
     tidyselect,
     plyr,
-    rlang
+    rlang,
+    stringr,
+    readr,
+    tidyr
