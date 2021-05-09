@@ -23,4 +23,5 @@ Imports:
     rlang,
     stringr,
     readr,
-    tidyr
+    tidyr,
+    ggplot2
