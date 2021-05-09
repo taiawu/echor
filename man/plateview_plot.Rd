@@ -7,6 +7,7 @@
 plateview_plot(
   layout_data,
   .fill_var,
+  .well_col = "well",
   col_breaks = 6,
   .title = "Plate-view plot",
   .scale_fill = scale_fill_viridis_d()
@@ -16,6 +17,8 @@ plateview_plot(
 \item{layout_data}{a layout tibble (as created by dsfworld::read_plate_layout()), containing columns for plate row (called "row"), plate column (called "column"), and one variable by which the plate will be colored}
 
 \item{.fill_var}{the column in the input layout by which to color in the wells in the plot}
+
+\item{.well_col}{the name of the column containing the wells. Defaults to "well".}
 
 \item{col_breaks}{the number of tick marks and lines in the x axis (columns). Defaults to every 6 columns.}
 
