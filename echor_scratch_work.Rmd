@@ -1,0 +1,273 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(tidyverse)
+library(dsfworld)
+source("R/echo_instructions_from_layouts.R")
+```
+
+```{r}
+mother_layout <- dsfworld::read_plate_layout("layouts/Exp1145_mac1_mother_layout_2.csv")
+mother_layout_multi <- dsfworld::read_plate_layout("layouts/Exp1145_mac1_mother_layout_multi.csv")
+daughter_layout <- dsfworld::read_plate_layout("layouts/Exp1145--20210506_mac1_leadlike_follow_up_EBP_1.csv")
+
+mother <- dsfworld::read_plate_layout("layouts/mother_layout_simple.xlsx")
+daughter <- dsfworld::read_plate_layout("layouts/daughter_layout_simple.xlsx")
+```
+
+Walking through each function
+Rounding -- replacing echo round with plyr::round_any -- done!
+```{r}
+plyr::round_any(111, 2.5, )
+```
+
+Conditioning the mother and daughter layouts -- done!
+```{r}
+condition_for_echo <- function(layout, 
+                    which_plate,
+                    .well_col = "well",
+                    .compound_col = "compound",
+                    .concentration_col = "concentration",
+                    .volume_col = "volume",
+                    daughter_names = c("Destination Well", "compound", "daughter_conc", "daughter_final_vol"),
+                    mother_names  = c("Source Well", "compound", "mother_conc")
+) {
+  
+  # ensure valid plate type selection, or return error
+  assertthat::assert_that(which_plate %in% c("mother", "daughter"))
+  
+  # update the column names and columns to be selected according to plate selected, or return error
+    col_names <- switch(which_plate, "daughter" = daughter_names, "mother" = mother_names)
+    which_cols <- switch(which_plate,
+                        "daughter" = c({{ .well_col }}, {{ .compound_col }}, {{ .concentration_col }}, {{ .volume_col }}),
+                        "mother" = c({{ .well_col }}, {{ .compound_col }}, {{ .concentration_col }}))
+   
+  # ensure all requested columns are in the layout, or return error
+  assertthat::assert_that(length(col_names) == length(which_cols))
+  
+  # ensure length of new name vector matches selected columns, or return error
+  assertthat::assert_that(all(as.character(which_cols) %in% names(layout)))
+
+  # condition the layout
+  layout %>% 
+      filter(is.na({{ .compound_col }}) == FALSE) %>%
+      select(all_of(which_cols)) %>%
+      set_names(col_names)
+
+}
+
+daughter_c <- condition_for_echo(daughter, which_plate = "daughter")
+mother_c <- condition_for_echo(mother, which_plate = "mother")
+```
+
+Write compound transfers and final concentrations
+```{r}
+calculate_dilutions <- function(cmpd_joined, .echo_drop_nL = 25) { # if there are compounds in the daughter not in the mother
+  
+  # transfers will evenly distribute across identical mother wells because of left_join default behavior
+    cmpd_joined %>%
+                 mutate(mother_dil = (.data$daughter_conc/.data$mother_conc) * ( .data$daughter_final_vol),
+                        mother_vol = plyr::round_any(.data$mother_dil, .echo_drop_nL, ceiling),
+                        final_conc = (.data$mother_conc*.data$mother_vol)/.data$daughter_final_vol,
+                        rounded_up = .data$final_conc - .data$daughter_conc,
+                        rounded_up_perc = if_else(.data$daughter_conc == 0, true = 0, false = round(100*.data$rounded_up/.data$daughter_conc, 1)))
+}
+
+calculate_cmpd_transfers <- function(conditioned_daugther, 
+                                conditioned_mother, 
+                                .echo_drop_nL = 25,
+                                missing_cmpds = "stop",
+                                conc_error = "stop") {
+  ## in a shiny app, the workflow would probably be: throw an error catcher, and user can select what to do going forward, recalling with new values for missing_cmpds and conc_error 
+  
+    ####### ---- ensure valid options selected for transfer issues
+    assertthat::assert_that(missing_cmpds %in% c("stop", "drop"))
+    assertthat::assert_that(conc_error %in% c("stop", "drop", "scale_down", "make_max"))
+    
+    
+    ####### ---- calculate the transfers
+    joined <- left_join(conditioned_daugther, conditioned_mother, by = "compound")
+    cmpd_trans <- calculate_dilutions(joined, .echo_drop_nL) 
+    
+          ####### ---- handle any issues with the daughter layout
+          ## -- if there are compounds present the daughter but not the mother
+              if (all(conditioned_daugther$compound %in% conditioned_mother$compound) == FALSE) {
+                # option 1: drop the problem wells from the daughter plate
+                if (missing_cmpds == "drop") { # drop the missing compounds from the daughter
+                  cmpd_trans <- cmpd_trans %>% filter(is.na(mother_vol) == FALSE)
+                  
+                # option 2 (default): throw an error 
+                } else { # or throw an error
+                  assertthat::assert_that(all(conditioned_daugther$compound %in% conditioned_mother$compound))
+                } 
+              }
+         
+         ## -- daughter concentrations higher than mother concentration
+              if (any( cmpd_trans$mother_vol > cmpd_trans$daughter_final_vol )) {
+                # bool selector for problem rows
+                error_rows <- cmpd_trans$mother_vol > cmpd_trans$daughter_final_vol
+            
+                # option 1: drop the problem wells from the daughter
+                if (conc_error == "drop") { 
+                  cmpd_trans <- cmpd_trans[!error_rows,]
+                  
+                # option 2: scale down all occurences of this compound in the daughter to those achievable by mother
+                } else if (conc_error == "scale_down") {
+                  error_cmpds <- cmpd_trans[error_rows,] %>% pull(compound) %>% unique() # identify which compounds have errors
+                  
+                # scale down the concentration in the daughter equally wherever this compound appears
+                 dil_daughter <-  cmpd_trans %>%
+                                      filter(compound %in% error_cmpds) %>%
+                                      group_by(compound) %>%
+                                      mutate(daughter_conc = .data$daughter_conc*(.data$mother_conc/max(.data$daughter_conc))) %>%
+                                      ungroup() %>%
+                                      calculate_dilutions(., .echo_drop_nL)
+                 
+                 # re-append this to the rest of the transfers
+                 cmpd_trans <- cmpd_trans %>%
+                                   filter(!compound %in% error_cmpds) %>%
+                                   bind_rows(dil_daughter)
+                 
+                # option 3: replace over-concentrated wells with undiluted mother stock
+                } else if (conc_error == "make_max" ) {
+                  # where ever the daughter concentration exceeds the mother, just make it the mother concentration
+                  cmpd_trans <- cmpd_trans %>%
+                                mutate(daughter_conc =  replace(.data$daughter_conc, error_rows, .data$mother_conc[error_rows])) %>%
+                                calculate_dilutions(., .echo_drop_nL) 
+                
+                # option 4 (default): throw an error 
+                } else { 
+                  assertthat::assert_that(any(cmpd_trans$daughter_final_vol - cmpd_trans$mother_vol < 0) == FALSE )
+                } 
+              }
+   
+   cmpd_trans %>%
+     mutate(dilution_vol = .data$daughter_final_vol - .data$mother_vol)
+   
+}
+
+write_echo_instructions <- function(cmpd_trans, conditioned_mother, .dil_name = "DMSO", .max_pull_nL = 40000) {
+  
+  ## ensure the mother has at least one well of the dilution material
+  assertthat::assert_that(.dil_name %in% conditioned_mother$compound)
+  
+  dil_df <- cmpd_trans %>% 
+                filter(.data$dilution_vol > 0) %>%
+                select(.data$`Destination Well`, .data$`dilution_vol`) %>%
+                mutate(compound = .dil_name) %>%
+                left_join(conditioned_mother, by = "compound") %>%
+                rename("Transfer Volume" = .data$dilution_vol) %>%
+                select(.data$`Destination Well`, .data$`Source Well`, .data$`Transfer Volume`)
+  
+  ## ensure the mother has at least one well of the dilution material
+  dil_vol_total <- dil_df %>%
+                    group_by(`Source Well`) %>%
+                    summarise(total_transfer_vol = sum(`Transfer Volume`)) %>%
+                    pull(total_transfer_vol)
+  
+  ## throw an error if the maximum volume is exceeded
+  assertthat::assert_that(all(.max_pull_nL > dil_vol_total))
+  
+  # calculate the final instructions
+  cmpd_trans %>%
+      rename("Transfer Volume" = .data$mother_vol) %>%
+      bind_rows(dil_df) %>%
+    
+      mutate("Source Plate Name" = rep("Source[1]", times = nrow(.)),
+           "Destination Plate Name" = rep("Destination[1]", times = nrow(.)),
+           "Destination Well X Offset"	= rep(NA, times = nrow(.)),
+           "Destination Well Y Offset"	= rep(NA, times = nrow(.))) %>%
+    
+    select(all_of(c("Source Plate Name",	"Source Well",
+                    "Destination Plate Name",	"Destination Well",
+                    "Transfer Volume",	"Destination Well X Offset",
+                    "Destination Well Y Offset")))
+}
+
+transfers <- calculate_cmpd_transfers(daughter_c, 
+                                       mother_c, 
+                                       2.5,
+                                       missing_cmpds = "drop",
+                                       conc_error = "drop"
+                                       ) 
+
+write_echo_instructions(transfers, mother_c, .dil_name = "DMSO", .max_pull_nL = 40000)
+```
+
+
+```{r}
+# multiple daughter wells, single mother well <- easy, this will happen on its own
+# multiple daughter wells, multiple mother wells <- 
+# single daughter well, single mother well
+# single daughter well, multiple mother wells
+```
+
+
+```{r}
+make_echo_instructions <- function(daughter_layout, 
+                                   mother_layout, 
+                                   .echo_drop_nL = 25,
+                                   .return_value = "echo_instructions",
+                                   ...) {
+  
+  #### combine mother and daughter layouts
+  all_values <- conditioned_daughter %>%
+    left_join(conditioned_mother, by = "compound") %>%
+    mutate(mother_dil = (.data$daughter_conc/.data$mother_conc) * ( .data$daughter_final_vol)) %>%
+    mutate(mother_vol = sapply(X =.data$mother_dil, FUN = echo_round, .round = .echo_drop_nL), #### THIS IS WHERE THE ROUNDING HAPPENS
+           DMSO_vol = .data$daughter_final_vol - .data$mother_vol, 
+           "Source Plate Name" = rep("Source[1]", times = nrow(.)),
+           "Destination Plate Name" = rep("Destination[1]", times = nrow(.)),
+           "Destination Well X Offset"	= rep(NA, times = nrow(.)),
+           "Destination Well Y Offset"	= rep(NA, times = nrow(.)))
+  
+  # add DMSO dilution volumes
+  final_values <- add_DMSO_dil(all_values, conditioned_mother) %>%
+    bind_rows(all_values, . ) %>%
+    mutate(final_daughter_conc = (.data$mother_vol * .data$mother_conc)/.data$daughter_final_vol) 
+  
+  echo_instructions <- final_values %>%
+    rename("Transfer Volume" = .data$mother_vol) %>%
+    select(all_of(c("Source Plate Name",	"Source Well",
+                    "Destination Plate Name",	"Destination Well",
+                    "Transfer Volume",	"Destination Well X Offset",
+                    "Destination Well Y Offset")))
+  
+  out <- switch(.return_value,
+                "echo_instructions" = echo_instructions,
+                "final_values"=  final_values
+                )
+  
+  out
+ 
+}
+```
+
+
+
+Make and save echo instructions from the layouts
+```{r}
+
+
+save_echo_instructions(all_layouts_EBP, 
+                       mother_layout,
+                                   .title = "Exp1145--20210506_mac1_leadlike_follow_up_EBP_",
+                                   .save_name = "Exp1145--20210506_mac1_leadlike_follow_up_EBP_",
+                                   .save_path = "echo_instructions/Exp1145--20210507_echo_instructions_EBP/",
+                                   .save_width = 11,
+                                   .save_height = 10)
+
+for (i in all_layouts_prot %>% pull(plate) %>% unique() ) {
+  all_layouts_prot %>% 
+    filter(plate == i) %>%
+    save_echo_instructions( . , 
+                       mother_layout,
+                                   .title = glue::glue("Exp1145--20210506_mac1_leadlike_follow_up_protein_{i}_"),
+                                   .save_name = glue::glue("Exp1145--20210506_mac1_leadlike_follow_up_protein_{i}_"),
+                                   .save_path = glue::glue("echo_instructions/Exp1145--20210507_echo_instructions_protein_{i}/"),
+                                   .save_width = 11,
+                                   .save_height = 10)
+}
+```
