@@ -13,83 +13,30 @@
 #'
 #' @importFrom magrittr "%>%"
 #' @importFrom assertthat assert_that
-#' @importFrom dplyr left_join filter mutate group_by ungroup bind_rows pull
-#' @importFrom plyr round_any
-#' @importFrom rlang .data
+#' @importFrom dplyr mutate ungroup
 #' @importFrom utils "globalVariables"
 #'
 #' @export
 #'
+### get the transfer steps
 get_transfer_steps <- function(standardized_daugther,
                                standarized_mother,
                                .echo_drop_nL = 25,
-                               missing_cmpds = "stop",
-                               conc_error = "stop") {
+                               missing_cmpds = "drop",
+                               conc_error = "drop") {
   ## in a shiny app, the workflow would probably be: throw an error catcher, and user can select what to do going forward, recalling with new values for missing_cmpds and conc_error
+
 
   ####### ---- ensure valid options selected for transfer issues
   assertthat::assert_that(missing_cmpds %in% c("stop", "drop"))
   assertthat::assert_that(conc_error %in% c("stop", "drop", "scale_down", "make_max"))
 
-
   ####### ---- calculate the transfers
-  joined <- left_join(standardized_daugther, standarized_mother, by = "compound")
-  cmpd_trans <- calculate_dilutions(joined, .echo_drop_nL)
-
-  ####### ---- handle any issues with the daughter layout
-  ## -- if there are compounds present the daughter but not the mother
-  if (all(standardized_daugther$compound %in% standarized_mother$compound) == FALSE) {
-    # option 1: drop the problem wells from the daughter plate
-    if (missing_cmpds == "drop") { # drop the missing compounds from the daughter
-      cmpd_trans <- cmpd_trans %>% filter(is.na(.data$mother_vol) == FALSE)
-
-      # option 2 (default): throw an error
-    } else { # or throw an error
-      assertthat::assert_that(all(standardized_daugther$compound %in% standarized_mother$compound))
-    }
-  }
-
-  ## -- daughter concentrations higher than mother concentration
-  if (any( cmpd_trans$mother_vol > cmpd_trans$daughter_final_vol )) {
-    # bool selector for problem rows
-    error_rows <- cmpd_trans$mother_vol > cmpd_trans$daughter_final_vol
-
-    # option 1: drop the problem wells from the daughter
-    if (conc_error == "drop") {
-      cmpd_trans <- cmpd_trans[!error_rows,]
-
-      # option 2: scale down all occurences of this compound in the daughter to those achievable by mother
-    } else if (conc_error == "scale_down") {
-      error_cmpds <- cmpd_trans[error_rows,] %>% pull(.data$compound) %>% unique() # identify which compounds have errors
-
-      # scale down the concentration in the daughter equally wherever this compound appears
-      dil_daughter <-  cmpd_trans %>%
-        filter(.data$compound %in% error_cmpds) %>%
-        group_by(.data$compound) %>%
-        mutate(daughter_conc = .data$daughter_conc*(.data$mother_conc/max(.data$daughter_conc))) %>%
-        ungroup() %>%
-        calculate_dilutions(., .echo_drop_nL)
-
-      # re-append this to the rest of the transfers
-      cmpd_trans <- cmpd_trans %>%
-        filter(!.data$compound %in% error_cmpds) %>%
-        bind_rows(dil_daughter)
-
-      # option 3: replace over-concentrated wells with undiluted mother stock
-    } else if (conc_error == "make_max" ) {
-      # where ever the daughter concentration exceeds the mother, just make it the mother concentration
-      cmpd_trans <- cmpd_trans %>%
-        mutate(daughter_conc =  replace(.data$daughter_conc, error_rows, .data$mother_conc[error_rows])) %>%
-        calculate_dilutions(., .echo_drop_nL)
-
-      # option 4 (default): throw an error
-    } else {
-      assertthat::assert_that(any(cmpd_trans$daughter_final_vol - cmpd_trans$mother_vol < 0) == FALSE )
-    }
-  }
-
-  cmpd_trans %>%
-    mutate(dilution_vol = .data$daughter_final_vol - .data$mother_vol)
+  cmpd_trans <- calculate_dilutions(standardized_daugther, standarized_mother, .echo_drop_nL) %>%
+    repair_conc_error(conc_error, .echo_drop_nL) %>%
+    mutate(dilution_vol = .data$daughter_final_vol - .data$mother_vol) %>%
+    distribute_across_source(.echo_drop_nL) %>%
+    ungroup()
 
 }
 

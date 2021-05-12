@@ -8,8 +8,8 @@ get_transfer_steps(
   standardized_daugther,
   standarized_mother,
   .echo_drop_nL = 25,
-  missing_cmpds = "stop",
-  conc_error = "stop"
+  missing_cmpds = "drop",
+  conc_error = "drop"
 )
 }
 \arguments{

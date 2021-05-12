@@ -5,18 +5,21 @@
 \title{Write echo instructions}
 \usage{
 write_echo_instructions(
-  trans_data,
+  transfers,
   standardized_mother,
+  .echo_drop_nL = 25,
   .dil_name = "DMSO",
   .max_pull_nL = 40000
 )
 }
 \arguments{
-\item{trans_data}{A tibble containing the calculated transfer steps, as created by get_transfer_steps()}
+\item{transfers}{A tibble containing the calculated transfer steps, as created by get_transfer_steps()}
 
-\item{standardized_mother}{The conditions}
+\item{standardized_mother}{The mother plate layout, standardized for echo, as done by standardize_layout(which_plate = "mother")}
 
-\item{.dil_name}{The name of the compound in the mother used for dilutions. Defaults to "DMSO".}
+\item{.echo_drop_nL}{The droplet volume for the echo to be used, in nL. Defaults to 25.}
+
+\item{.dil_name}{The name, as listed in the mother plate, of the substance to be used for dilutions. Defaults to "DMSO"}
 
 \item{.max_pull_nL}{The maximum volume (in nL) that can be pulled from any one well in the mother plate for dilutions.}
 }

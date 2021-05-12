@@ -4,10 +4,12 @@
 \alias{calculate_dilutions}
 \title{Calculate dilutions between mother and daughter plates}
 \usage{
-calculate_dilutions(cmpd_joined, .echo_drop_nL = 25)
+calculate_dilutions(daughter, mother, .echo_drop_nL = 25)
 }
 \arguments{
-\item{cmpd_joined}{a tibble, resulting from joining a standardized mother and standardized daughter layout.}
+\item{daughter}{daughter plate layout, standardized for echo functions with standardize_layout()}
+
+\item{mother}{mother plate layout, standardized for echo functions with standardize_layout()}
 
 \item{.echo_drop_nL}{the droplet size of the Echo to be used, in nL. Defaults to 25.}
 }
