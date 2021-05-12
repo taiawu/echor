@@ -24,9 +24,16 @@ handle_varied_mother_concentrations <- function(mother, keep_which = "max_conc")
            most_wells = max(.data$well_per_conc)[[1]]) %>% # which conc has the most wells
     ungroup()
 
+  # manage the case where multiple concentrations have an equal number of wells
+  most_wells_conc <- tallied %>%
+                  filter(.data$well_per_conc == .data$most_wells) %>%
+                  pull(.data$concentration) %>%
+                  unique()
+
   out <- switch(keep_which,
                 "max_conc" = tallied %>% filter(.data$mother_conc == .data$max_conc), # keep the wells with the highest conc
-                "most_wells" = tallied %>% filter(.data$well_per_conc == .data$most_wells)) # keep the concentrations with the most wells
+                "most_wells" = tallied %>% filter(.data$well_per_conc == .data$most_wells,
+                                                  .data$concentration == most_wells_conc)) # keep the concentrations with the most wells
 
   # remove the columns created by these operations
   out %>%
