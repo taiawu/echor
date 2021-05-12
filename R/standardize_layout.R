@@ -16,8 +16,8 @@
 #' @importFrom magrittr "%>%"
 #' @importFrom assertthat assert_that
 #' @importFrom purrr set_names
-#' @importFrom dplyr filter select
-#' @importFrom tidyselect all_of
+#' @importFrom dplyr filter select across
+#' @importFrom tidyselect all_of everything
 #'
 #' @export
 #'
@@ -39,6 +39,9 @@ standardize_layout <- function(layout,
   which_cols <- switch(which_plate,
                        "daughter" = c({{ .well_col }}, {{ .compound_col }}, {{ .concentration_col }}, {{ .volume_col }}),
                        "mother" = c({{ .well_col }}, {{ .compound_col }}, {{ .concentration_col }}))
+  numeric_cols <- switch(which_plate,
+                        "daughter" = c({{ .concentration_col }}, {{ .volume_col }}),
+                        "mother" = c({{ .compound_col }}))
 
   # ensure all requested columns are in the layout, or return error
   assertthat::assert_that(length(col_names) == length(which_cols))
@@ -50,6 +53,8 @@ standardize_layout <- function(layout,
   layout %>%
     filter(is.na({{ .compound_col }}) == FALSE) %>%
     select(all_of(which_cols)) %>%
+    mutate(across(cols = everything(), as.character),
+           across(any_of(c("concentration", "volume")), as.numeric)) %>%
     set_names(col_names)
 
 }
